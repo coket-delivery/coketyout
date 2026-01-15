@@ -2,18 +2,14 @@ import subprocess
 import sys
 import os
 
-# 시스템 패키지 설치
+# 시스템 패키지만 설치
 os.system('apt-get update > /dev/null 2>&1')
 os.system('apt-get install -y ffmpeg > /dev/null 2>&1')
-
-# Python 패키지 설치
-subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'streamlit', 'openai-whisper', 'pytube', '-q'])
 
 import streamlit as st
 import whisper
 from pytube import YouTube
 from datetime import datetime
-import os
 
 st.set_page_config(page_title="방송 받아쓰기", layout="wide")
 st.title("유튜브 방송 받아쓰기")

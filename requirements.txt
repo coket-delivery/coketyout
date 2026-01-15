@@ -1,4 +1,5 @@
 streamlit==1.53.0
-openai-whisper==20250101
-yt-dlp==2025.1.15
-
+faster-whisper>=0.10.0
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy<2.0

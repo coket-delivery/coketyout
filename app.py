@@ -2,22 +2,24 @@ import subprocess
 import sys
 import os
 
-try:
-    subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-except:
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python'])
-    os.system('apt-get update && apt-get install -y ffmpeg')
+# 시스템 패키지 설치
+os.system('apt-get update > /dev/null 2>&1')
+os.system('apt-get install -y ffmpeg > /dev/null 2>&1')
+
+# Python 패키지 설치
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'yt-dlp', '-q'])
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'streamlit', 'openai-whisper', '-q'])
 
 import streamlit as st
 import whisper
 from yt_dlp import YoutubeDL
 from datetime import datetime
-import tempfile
+import json
 
 st.set_page_config(page_title="방송 받아쓰기", layout="wide")
 st.title("유튜브 방송 받아쓰기")
 
-st.subheader("실시간 방송 또는 영상을 텍스트로 변환합니다 (1분마다 업데이트)")
+st.subheader("실시간 방송 또는 영상을 텍스트로 변환합니다")
 
 youtube_url = st.text_input("유튜브 URL 입력 (라이브 방송 또는 영상):")
 
@@ -28,54 +30,74 @@ if st.button("받아쓰기 시작"):
         try:
             os.makedirs("temp", exist_ok=True)
             
-            # 스트림 다운로드
+            # YouTube 최신 보안 우회 옵션
             ydl_opts = {
-                'format': 'best',
-                'outtmpl': 'temp/audio',
-                'quiet': True,
-                'no_warnings': True,
+                'format': 'bestvideo+bestaudio/best',
+                'outtmpl': 'temp/audio.%(ext)s',
+                'quiet': False,
+                'no_warnings': False,
+                'socket_timeout': 60,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                },
+                'extractor_args': {
+                    'youtube': {
+                        'player_skip': ['js', 'webpage'],
+                        'skip': ['hls', 'dash'],
+                    }
+                },
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'merge_output_format': 'mp4',
+                'prefer_ffmpeg': True,
+                'keepvideo': False,
+                'quiet': False,
+                'no_warnings': False,
             }
             
-            with YoutubeDL(ydl_opts) as ydl:
-                ydl.download([youtube_url])
+            st.info("📥 유튜브에서 다운로드 중... (1-5분)")
             
-            # 오디오 파일 찾기
+            with YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(youtube_url, download=True)
+                video_title = info_dict.get('title', 'video')
+            
+            # 다운로드된 파일 찾기
             audio_file = None
-            for file in os.listdir("temp"):
-                if file.startswith("audio"):
-                    audio_file = f"temp/{file}"
+            for root, dirs, files in os.walk('temp'):
+                for file in files:
+                    if file.endswith(('.mp4', '.m4a', '.mp3', '.wav', '.webm')):
+                        audio_file = os.path.join(root, file)
+                        break
+                if audio_file:
                     break
             
             if audio_file:
                 st.info("🤖 AI 모델 로드 중...")
                 model = whisper.load_model("base")
                 
-                st.success("✅ 받아쓰기 시작! (1분마다 업데이트됩니다)")
+                st.success("🎙️ 음성 인식 중... (파일 길이에 따라 5-30분)")
                 
-                # 1분(60초)마다 받아쓰기
-                result_placeholder = st.empty()
-                progress_placeholder = st.empty()
-                
-                all_text = ""
-                segment_number = 1
-                
-                # 음성 파일 전체 받아쓰기 (한 번에)
-                result = model.transcribe(audio_file, language="ko")
+                # 받아쓰기
+                result = model.transcribe(audio_file, language="ko", verbose=False)
                 full_text = result["text"]
                 
-                # 1분마다 텍스트 분할해서 표시
-                words = full_text.split()
-                words_per_minute = max(1, len(words) // 60)  # 1분마다 몇 단어씩
-                
-                with result_placeholder.container():
-                    st.text_area(
-                        "📝 받아쓰기 결과 (실시간):",
-                        full_text,
-                        height=400,
-                        disabled=True
-                    )
-                
                 st.success("✅ 완료!")
+                
+                # 결과 표시
+                st.text_area(
+                    "📝 받아쓰기 결과:",
+                    full_text,
+                    height=400,
+                    disabled=True
+                )
                 
                 # 다운로드 버튼
                 col1, col2, col3 = st.columns(3)
@@ -100,25 +122,52 @@ if st.button("받아쓰기 시작"):
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.info(f"**처리 시간**\n{datetime.now().strftime('%H:%M:%S')}")
+                    st.info(f"**제목**\n{video_title[:30]}")
                 with col2:
-                    st.info(f"**평균 단어/분**\n{words_per_minute}")
+                    st.info(f"**문장 수**\n{full_text.count('.')}")
                 with col3:
-                    st.info(f"**총 문장 수**\n{full_text.count('.')}")
+                    st.info(f"**완료 시간**\n{datetime.now().strftime('%H:%M:%S')}")
                 
-                # 파일 삭제
-                os.remove(audio_file)
+                # 파일 정리
+                try:
+                    import shutil
+                    shutil.rmtree('temp')
+                except:
+                    pass
+            
+            else:
+                st.error("❌ 다운로드된 파일을 찾을 수 없습니다")
         
         except Exception as e:
-            st.error(f"❌ 오류: {str(e)}")
-            st.info("💡 팁: 방송이 진행 중인지 확인하세요. 라이브 방송 URL을 사용해주세요.")
+            error_msg = str(e)
+            st.error(f"❌ 오류: {error_msg}")
+            
+            if "No video formats found" in error_msg:
+                st.warning("""
+                **YouTube 보안 오류**
+                
+                현재 YouTube의 최신 보안 때문에 일부 영상이 다운로드되지 않을 수 있습니다.
+                
+                **해결책:**
+                1. 다른 영상을 시도해보세요
+                2. 몇 분 후 다시 시도하세요
+                3. 영상의 공개 설정을 확인하세요
+                """)
+            else:
+                st.warning("""
+                **문제 해결:**
+                1. 유튜브 URL이 정확한지 확인하세요
+                2. 라이브 방송이 진행 중인지 확인하세요
+                3. 인터넷 연결을 확인하세요
+                4. 잠시 후 다시 시도하세요
+                """)
 
 st.divider()
 st.info("""
 **사용 방법:**
-1. 유튜브 라이브 방송 URL 입력
+1. 유튜브 라이브 방송 또는 영상 URL 입력
 2. "받아쓰기 시작" 클릭
-3. AI가 실시간으로 음성을 텍스트로 변환
+3. AI가 음성을 텍스트로 변환
 4. 결과 텍스트 다운로드
 
 **지원:**
@@ -128,6 +177,7 @@ st.info("""
 - ✅ 100% 무료
 
 **처리 시간:**
+- 30분 = 2-3분
 - 1시간 = 5-10분
 - 2시간 = 10-20분
 """)

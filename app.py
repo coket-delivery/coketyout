@@ -1,7 +1,9 @@
+import os
+os.system("apt-get update && apt-get install -y ffmpeg > /dev/null 2>&1")
+
 import streamlit as st
 import whisper
 from yt_dlp import YoutubeDL
-import os
 from datetime import datetime
 
 st.set_page_config(page_title="방송 받아쓰기", layout="wide")
@@ -9,7 +11,6 @@ st.title("유튜브 방송 받아쓰기")
 
 st.subheader("실시간 방송 또는 영상을 텍스트로 변환합니다")
 
-# URL 입력
 youtube_url = st.text_input("유튜브 URL 입력 (라이브 방송 또는 영상):")
 
 if st.button("받아쓰기 시작"):
@@ -17,13 +18,10 @@ if st.button("받아쓰기 시작"):
         st.info("⏳ 스트림 처리 중... (1-2분)")
         
         try:
-            # 임시 폴더 생성
             os.makedirs("temp", exist_ok=True)
             
-            # 스트림을 직접 Whisper로 처리 (MP4 저장 안 함)
             st.info("🎙️ 음성 인식 중...")
             
-            # yt-dlp로 스트림 캡처 (파일로 저장하지 않고 직접 처리)
             ydl_opts = {
                 'format': 'best',
                 'outtmpl': 'temp/audio',
@@ -34,7 +32,6 @@ if st.button("받아쓰기 시작"):
             with YoutubeDL(ydl_opts) as ydl:
                 ydl.download([youtube_url])
             
-            # 저장된 파일 찾기
             audio_file = None
             for file in os.listdir("temp"):
                 if file.startswith("audio"):
@@ -44,19 +41,15 @@ if st.button("받아쓰기 시작"):
             if audio_file:
                 st.info("🤖 AI 분석 중...")
                 
-                # Whisper로 받아쓰기
                 model = whisper.load_model("base")
                 result = model.transcribe(audio_file, language="ko")
                 
-                # 결과
                 st.success("✅ 완료!")
                 
                 text = result["text"]
                 
-                # 결과 표시
                 st.text_area("📝 받아쓰기 결과:", text, height=400)
                 
-                # 다운로드
                 st.download_button(
                     label="📥 텍스트 다운로드",
                     data=text,
@@ -64,7 +57,6 @@ if st.button("받아쓰기 시작"):
                     mime="text/plain"
                 )
                 
-                # 통계
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("총 글자 수", len(text))
@@ -73,7 +65,6 @@ if st.button("받아쓰기 시작"):
                 with col3:
                     st.metric("완료 시간", datetime.now().strftime("%H:%M:%S"))
                 
-                # 파일 삭제
                 os.remove(audio_file)
         
         except Exception as e:

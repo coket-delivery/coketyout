@@ -1,5 +1,12 @@
+import subprocess
+import sys
 import os
-os.system("apt-get update && apt-get install -y ffmpeg > /dev/null 2>&1")
+
+try:
+    subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+except:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python'])
+    os.system('apt-get update && apt-get install -y ffmpeg')
 
 import streamlit as st
 import whisper

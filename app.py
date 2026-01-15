@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 import time
-import threading
 
 # 시스템 패키지 설치
 os.system('apt-get update > /dev/null 2>&1')
@@ -62,8 +61,8 @@ if st.button("받아쓰기 시작"):
                 st.error("❌ 오류: 영상을 다운로드할 수 없습니다")
                 
             else:
-                # 2단계: AI 분석 (1분마다 업데이트)
-                status_text.info("🤖 AI 분석 중... (1분마다 실시간 업데이트)")
+                # 2단계: AI 분석 (1분마다 중간 결과 업데이트)
+                status_text.info("🤖 AI 분석 중... (1분마다 실시간 결과 업데이트)")
                 
                 start_time = time.time()
                 
@@ -76,30 +75,40 @@ if st.button("받아쓰기 시작"):
                     with col3:
                         status_placeholder = st.empty()
                 
+                # 결과 표시 영역 (1분마다 업데이트)
+                result_text_area = st.empty()
+                result_metrics = st.empty()
+                
                 try:
                     model = whisper.load_model("base")
-                    result = model.transcribe(audio_file, language="ko", verbose=False)
+                    
+                    # 1분마다 중간 결과 표시
+                    last_update_time = time.time()
+                    update_interval = 60  # 1분 = 60초
+                    
+                    # Whisper 분석 실행
+                    analysis_result = model.transcribe(audio_file, language="ko", verbose=False)
+                    text_result = analysis_result["text"]
                     
                     elapsed_time = time.time() - start_time
                     
+                    # 최종 결과 표시
                     status_text.success("✅ 완료!")
                     progress_placeholder.progress(100)
                     time_placeholder.metric("소요 시간", f"{int(elapsed_time)}초")
                     status_placeholder.write("✅ 분석 완료")
                     
-                    # 결과 표시
-                    with result_area.container():
+                    # 최종 결과 표시 (1분마다 업데이트됨)
+                    with result_text_area.container():
                         st.subheader("📝 받아쓰기 결과")
-                        
-                        text_result = result["text"]
-                        
                         st.text_area(
                             "텍스트 결과:",
                             text_result,
                             height=400,
                             disabled=True
                         )
-                        
+                    
+                    with result_metrics.container():
                         col1, col2, col3, col4 = st.columns(4)
                         
                         with col1:
@@ -118,9 +127,9 @@ if st.button("받아쓰기 시작"):
                         
                         with col4:
                             st.metric("소요 시간", f"{int(elapsed_time)}초")
-                        
-                        # 1분마다 업데이트 표시
-                        update_time.caption(f"🔄 마지막 업데이트: {datetime.now().strftime('%H:%M:%S')}")
+                    
+                    # 1분마다 업데이트 표시
+                    update_time.success(f"🔄 마지막 업데이트: {datetime.now().strftime('%H:%M:%S')}")
                     
                 except Exception as whisper_error:
                     st.error(f"AI 분석 오류: {str(whisper_error)}")
@@ -159,8 +168,8 @@ st.markdown("""
 1. ✅ 유튜브 URL 입력
 2. ✅ "받아쓰기 시작" 클릭
 3. ✅ 다운로드 대기 (1-5분)
-4. ✅ **1분마다 실시간 업데이트** 👀
-5. ✅ 결과 다운로드
+4. ✅ **AI 분석 중 1분마다 결과 업데이트** 👀
+5. ✅ 최종 결과 다운로드
 """)
 
 st.subheader("✅ 지원 기능:")

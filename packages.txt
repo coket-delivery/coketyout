@@ -1,5 +1,3 @@
-streamlit==1.40.2
-openai-whisper==20231117
-moviepy==1.0.3
-numpy==1.26.4
-scipy==1.11.4
+ffmpeg
+libsm6
+libxrender-dev

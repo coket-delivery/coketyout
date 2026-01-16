@@ -1,1 +1,3 @@
 ffmpeg
+libsm6
+libxrender-dev

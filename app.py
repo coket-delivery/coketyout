@@ -1,255 +1,261 @@
-import os
 import streamlit as st
 import whisper
+import os
+import subprocess
+import json
+from pathlib import Path
 from datetime import datetime
-import shutil
-import time
-import sys
+import tempfile
+import numpy as np
+from moviepy.editor import VideoFileClip
+import math
 
-os.system('apt-get update > /dev/null 2>&1')
-os.system('apt-get install -y ffmpeg > /dev/null 2>&1')
-
-st.set_page_config(page_title="방송 받아쓰기", layout="wide")
-st.title("방송 받아쓰기")
-
-st.subheader("영상을 텍스트로 변환합니다 (1분마다 업데이트)")
-
-st.write("✅ 컴퓨터에서 영상 파일 선택 후 받아쓰기")
-
-# 세션 상태에 결과 저장
-if 'transcription_result' not in st.session_state:
-    st.session_state.transcription_result = ""
-if 'update_count' not in st.session_state:
-    st.session_state.update_count = 0
-if 'is_processing' not in st.session_state:
-    st.session_state.is_processing = False
-
-uploaded_file = st.file_uploader(
-    "📁 영상 파일 선택",
-    type=["mp4", "avi", "mov", "mkv", "webm", "mp3", "wav", "m4a", "flac"]
+# 페이지 설정
+st.set_page_config(
+    page_title="동영상 한국말 받아쓰기",
+    page_icon="🎬",
+    layout="wide"
 )
 
-if uploaded_file is not None:
-    st.info(f"📂 선택된 파일: {uploaded_file.name} ({uploaded_file.size / (1024*1024):.1f}MB)")
+st.title("🎬 동영상 한국말 받아쓰기")
+st.markdown("Whisper AI를 사용한 정확한 한국어 음성 인식")
+
+# 사이드바 설정
+with st.sidebar:
+    st.header("⚙️ 설정")
+    model_size = st.selectbox(
+        "Whisper 모델 선택",
+        ["tiny", "base", "small", "medium", "large"],
+        help="작은 모델: 빠르지만 정확도 낮음\n큰 모델: 느리지만 정확도 높음"
+    )
     
-    if st.button("🎤 받아쓰기 시작"):
-        st.session_state.is_processing = True
-        st.session_state.update_count = 0
-        st.session_state.transcription_result = ""
+    output_format = st.selectbox(
+        "결과 형식",
+        ["텍스트 (.txt)", "JSON (.json)", "SRT 자막 (.srt)"],
+        help="받아쓰기 결과의 저장 형식을 선택하세요"
+    )
+
+# 주요 함수들
+@st.cache_resource
+def load_whisper_model(model_name):
+    """Whisper 모델 로드"""
+    return whisper.load_model(model_name)
+
+def get_audio_from_video(video_path):
+    """동영상에서 음성 추출"""
+    try:
+        video = VideoFileClip(video_path)
+        audio = video.audio
         
-        os.makedirs("temp", exist_ok=True)
+        if audio is None:
+            return None, "동영상에 음성이 없습니다."
         
-        try:
-            # 파일 저장
-            file_path = f"temp/{uploaded_file.name}"
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        duration = video.duration
+        video.close()
+        return audio, duration
+    except Exception as e:
+        return None, f"음성 추출 오류: {str(e)}"
+
+def transcribe_audio(audio, model, progress_bar=None):
+    """음성 받아쓰기"""
+    try:
+        # 임시 오디오 파일 저장
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
+            audio.write_audiofile(tmp_audio.name, verbose=False, logger=None)
+            tmp_audio_path = tmp_audio.name
+        
+        # Whisper로 받아쓰기
+        result = model.transcribe(
+            tmp_audio_path,
+            language="ko",
+            verbose=False
+        )
+        
+        # 임시 파일 삭제
+        os.remove(tmp_audio_path)
+        
+        return result, None
+    except Exception as e:
+        return None, f"받아쓰기 오류: {str(e)}"
+
+def format_time(seconds):
+    """초를 HH:MM:SS 형식으로 변환"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+def create_srt_content(segments):
+    """SRT 자막 형식 생성"""
+    srt_lines = []
+    for i, segment in enumerate(segments, 1):
+        start = format_time(segment['start'])
+        end = format_time(segment['end'])
+        text = segment['text'].strip()
+        
+        srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    
+    return "\n".join(srt_lines)
+
+def create_json_content(segments, metadata=None):
+    """JSON 형식 생성"""
+    data = {
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "model": "whisper",
+            "language": "ko"
+        },
+        "segments": [
+            {
+                "id": i,
+                "start": round(seg['start'], 2),
+                "end": round(seg['end'], 2),
+                "text": seg['text'].strip()
+            }
+            for i, seg in enumerate(segments, 1)
+        ],
+        "full_text": " ".join([seg['text'].strip() for seg in segments])
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+def create_txt_content(segments):
+    """텍스트 형식 생성"""
+    lines = []
+    for segment in segments:
+        start = format_time(segment['start'])
+        end = format_time(segment['end'])
+        text = segment['text'].strip()
+        lines.append(f"[{start} ~ {end}] {text}")
+    
+    return "\n".join(lines)
+
+# 메인 UI
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("📤 동영상 업로드")
+    uploaded_file = st.file_uploader(
+        "동영상 파일을 선택하세요",
+        type=["mp4", "avi", "mov", "mkv", "flv", "wmv", "webm", "m4v"],
+        help="지원 포맷: MP4, AVI, MOV, MKV, FLV, WMV, WebM, M4V"
+    )
+
+# 받아쓰기 처리
+if uploaded_file is not None:
+    # 파일 저장
+    with tempfile.NamedTemporaryFile(suffix=Path(uploaded_file.name).suffix, delete=False) as tmp_video:
+        tmp_video.write(uploaded_file.getbuffer())
+        tmp_video_path = tmp_video.name
+    
+    try:
+        # 동영상 정보 표시
+        with col2:
+            st.subheader("📊 파일 정보")
+            st.info(f"**파일명:** {uploaded_file.name}\n**파일 크기:** {uploaded_file.size / (1024*1024):.2f} MB")
+        
+        # 진행 상황 표시
+        st.subheader("🔄 처리 진행도")
+        
+        # 음성 추출 단계
+        st.write("**1단계: 음성 추출 중...**")
+        audio, duration_or_error = get_audio_from_video(tmp_video_path)
+        
+        if audio is None:
+            st.error(duration_or_error)
+        else:
+            st.success("✓ 음성 추출 완료")
+            st.write(f"📹 동영상 길이: {format_time(duration_or_error)}")
             
-            st.success(f"✅ 파일 저장 완료")
+            # 모델 로드 및 받아쓰기
+            st.write("**2단계: Whisper 모델 로드 중...**")
+            with st.spinner(f"📥 {model_size} 모델을 다운로드하고 있습니다..."):
+                model = load_whisper_model(model_size)
+            st.success("✓ 모델 로드 완료")
             
-            # 상태 표시 영역
-            status_area = st.empty()
-            progress_area = st.empty()
-            result_area = st.empty()
-            update_info = st.empty()
+            # 받아쓰기 시작
+            st.write("**3단계: 음성 인식 중...**")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            status_area.info("🤖 AI 모델 로드 중...")
+            with st.spinner("🎙️ Whisper가 음성을 인식하고 있습니다..."):
+                result, error = transcribe_audio(audio, model, progress_bar)
             
-            try:
-                # Whisper 모델 로드
-                model = whisper.load_model("base")
-                status_area.info("🎯 분석 시작...")
+            if error:
+                st.error(error)
+            else:
+                progress_bar.progress(100)
+                st.success("✓ 음성 인식 완료!")
                 
-                start_time = time.time()
+                # 결과 처리
+                segments = result['segments']
                 
-                # 진행 상황 표시
-                with progress_area.container():
-                    col1, col2, col3 = st.columns(3)
-                    progress_ph = col1.empty()
-                    time_ph = col2.empty()
-                    status_ph = col3.empty()
+                # 결과 탭
+                tab1, tab2, tab3 = st.tabs(["📝 결과 보기", "⏱️ 타임스탬프 포함", "📥 다운로드"])
                 
-                # 결과 표시 영역
-                result_text_ph = st.empty()
-                result_metrics_ph = st.empty()
+                with tab1:
+                    st.subheader("전체 받아쓰기 결과")
+                    full_text = " ".join([seg['text'].strip() for seg in segments])
+                    st.text_area(
+                        "받아쓰기 결과",
+                        value=full_text,
+                        height=300,
+                        disabled=True
+                    )
                 
-                # Whisper 분석 (에러 처리 강화)
-                try:
-                    analysis_result = model.transcribe(
-                        file_path,
-                        language="ko",
-                        verbose=False,
-                        fp16=False  # GPU 메모리 이슈 방지
+                with tab2:
+                    st.subheader("타임스탬프와 함께")
+                    for segment in segments:
+                        start = format_time(segment['start'])
+                        end = format_time(segment['end'])
+                        text = segment['text'].strip()
+                        st.markdown(f"**[{start} ~ {end}]** {text}")
+                
+                with tab3:
+                    st.subheader("📥 결과 다운로드")
+                    
+                    # 파일명 생성
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    base_filename = f"transcription_{timestamp}"
+                    
+                    # 선택된 형식에 따라 내용 생성
+                    if output_format == "텍스트 (.txt)":
+                        content = create_txt_content(segments)
+                        filename = f"{base_filename}.txt"
+                    elif output_format == "JSON (.json)":
+                        content = create_json_content(segments)
+                        filename = f"{base_filename}.json"
+                    else:  # SRT
+                        content = create_srt_content(segments)
+                        filename = f"{base_filename}.srt"
+                    
+                    # 다운로드 버튼
+                    st.download_button(
+                        label=f"📥 {filename} 다운로드",
+                        data=content,
+                        file_name=filename,
+                        mime="text/plain",
+                        use_container_width=True
                     )
                     
-                    st.session_state.transcription_result = analysis_result["text"]
-                    
-                except Exception as whisper_error:
-                    st.error(f"❌ 분석 오류: {str(whisper_error)}")
-                    st.session_state.is_processing = False
-                    
-                    if os.path.exists("temp"):
-                        shutil.rmtree('temp')
-                    st.stop()
-                
-                # ====== 1분마다 계속 업데이트 ======
-                last_update_time = time.time()
-                update_interval = 60  # 1분 = 60초
-                
-                while st.session_state.is_processing:
-                    try:
-                        current_time = time.time()
-                        elapsed_time = int(current_time - start_time)
-                        time_diff = current_time - last_update_time
-                        
-                        # 0초(처음) 또는 60초마다 업데이트
-                        if st.session_state.update_count == 0 or time_diff >= update_interval:
-                            st.session_state.update_count += 1
-                            last_update_time = current_time
-                            
-                            # 진행 상황 업데이트
-                            progress = min(100, st.session_state.update_count * 25)
-                            progress_ph.progress(progress)
-                            time_ph.metric("⏱️ 소요 시간", f"{elapsed_time}초")
-                            status_ph.write(f"🔄 업데이트 #{st.session_state.update_count}")
-                            
-                            # 결과 표시
-                            with result_text_ph.container():
-                                st.subheader(f"📝 받아쓰기 결과")
-                                st.subheader(f"(업데이트 #{st.session_state.update_count})")
-                                st.text_area(
-                                    "텍스트 결과:",
-                                    st.session_state.transcription_result,
-                                    height=400,
-                                    disabled=True,
-                                    key=f"result_{st.session_state.update_count}"
-                                )
-                            
-                            # 통계 업데이트
-                            with result_metrics_ph.container():
-                                st.subheader("📊 통계")
-                                
-                                col1, col2, col3, col4 = st.columns(4)
-                                
-                                with col1:
-                                    st.download_button(
-                                        "📥 텍스트 다운로드",
-                                        st.session_state.transcription_result,
-                                        f"transcription_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                                        "text/plain",
-                                        key=f"download_{st.session_state.update_count}"
-                                    )
-                                
-                                with col2:
-                                    st.metric("📄 글자 수", len(st.session_state.transcription_result))
-                                
-                                with col3:
-                                    st.metric("📚 단어 수", len(st.session_state.transcription_result.split()))
-                                
-                                with col4:
-                                    st.metric("⏱️ 소요 시간", f"{elapsed_time}초")
-                            
-                            # 마지막 업데이트 시간
-                            update_info.success(
-                                f"✅ 업데이트 #{st.session_state.update_count} | {datetime.now().strftime('%H:%M:%S')}"
-                            )
-                            
-                            # 최종 완료 후 탈출
-                            if st.session_state.update_count >= 1:
-                                break
-                        
-                        time.sleep(1)
-                    
-                    except BrokenPipeError:
-                        st.warning("⚠️ 연결이 끊겼습니다. 결과를 저장했습니다.")
-                        break
-                    except Exception as update_error:
-                        st.warning(f"⚠️ 업데이트 중 오류: {str(update_error)}")
-                        break
-                
-                # 최종 완료
-                status_area.success("✅ 완료!")
-                progress_ph.progress(100)
-                status_ph.success("✅ 분석 완료!")
-            
-            except Exception as e:
-                status_area.error(f"❌ 모델 로드 오류: {str(e)}")
-        
-        except Exception as e:
-            st.error(f"❌ 오류: {str(e)}")
-        
-        finally:
-            st.session_state.is_processing = False
-            if os.path.exists("temp"):
-                try:
-                    shutil.rmtree('temp')
-                except:
-                    pass
-
-st.markdown("---")
-
-st.subheader("📖 사용 방법:")
-st.markdown("""
-1. 📁 영상 파일 선택
-2. 🎤 "받아쓰기 시작" 클릭
-3. 🤖 AI 분석 진행 (1-10분)
-4. 📝 실시간 결과 업데이트
-5. 📥 완료 후 다운로드
-""")
-
-st.subheader("✅ 지원 파일 형식:")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.write("**영상**")
-    st.write("✅ MP4")
-    st.write("✅ AVI")
-    st.write("✅ MOV")
-with col2:
-    st.write("**영상 (계속)**")
-    st.write("✅ MKV")
-    st.write("✅ WEBM")
-    st.write("✅ FLV")
-with col3:
-    st.write("**오디오**")
-    st.write("✅ MP3")
-    st.write("✅ WAV")
-    st.write("✅ M4A")
-
-st.subheader("⏱️ 처리 시간:")
-st.markdown("""
-| 영상 길이 | 예상 시간 |
-|----------|----------|
-| 30분 | 2-3분 |
-| 1시간 | 5-10분 |
-| 2시간 | 10-20분 |
-""")
-
-st.subheader("❓ 자주 묻는 질문:")
-with st.expander("🔴 'Broken pipe' 오류가 났습니다"):
-    st.write("""
-    **원인**: Streamlit 연결 끊김
+                    # 통계
+                    st.divider()
+                    st.subheader("📊 통계")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("총 세그먼트", len(segments))
+                    with col2:
+                        word_count = len(full_text.split())
+                        st.metric("단어 수", word_count)
+                    with col3:
+                        st.metric("문자 수", len(full_text))
     
-    **해결**:
-    1. 페이지 새로고침
-    2. 다시 파일 선택
-    3. "받아쓰기 시작" 클릭
+    except Exception as e:
+        st.error(f"오류 발생: {str(e)}")
     
-    결과는 저장됩니다!
-    """)
+    finally:
+        # 임시 파일 정리
+        if os.path.exists(tmp_video_path):
+            os.remove(tmp_video_path)
 
-with st.expander("⏳ 분석이 오래 걸립니다"):
-    st.write("""
-    **정상입니다!**
-    - 30분 영상 = 2-3분 소요
-    - 1시간 영상 = 5-10분 소요
-    """)
-
-with st.expander("💾 파일 용량 제한이 있나요?"):
-    st.write("""
-    **Streamlit Cloud 기준:**
-    - 최대 200MB 업로드 가능
-    - 약 2시간 분량 영상
-    """)
-
-st.markdown("---")
-st.caption("🔒 개인정보 보호: 모든 파일은 처리 후 즉시 삭제됩니다")
+else:
+    st.info("💡 **사용방법:**\n1. 왼쪽에서 동영상 파일을 업로드하세요\n2. Whisper 모델과 출력 형식을 선택하세요\n3. 자동으로 받아쓰기가 진행됩니다\n4. 원하는 형식으로 결과를 다운로드하세요")
